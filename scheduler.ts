@@ -6,7 +6,7 @@
 import { disposable } from './disposable.ts'
 
 /**
- * Milliseconds on a schedulereduler’s timeline.
+ * Milliseconds on a scheduler’s timeline.
  */
 export type Time = number
 
@@ -47,7 +47,7 @@ export interface Task {
  * Schedule tasks and cancel them with the returned disposable handles.
  */
 export interface Scheduler {
-  /** Read the current time on this schedulereduler’s timeline. */
+  /** Read the current time on this scheduler’s timeline. */
   readonly currentTime: () => Time
   /** Schedule a task at the current time, after the current call. */
   readonly asap: (task: Task) => Disposable
@@ -55,7 +55,7 @@ export interface Scheduler {
   readonly delay: (delay: number, task: Task) => Disposable
   /** Repeat after each positive period. A nonpositive period runs once. */
   readonly periodic: (period: number, task: Task) => Disposable
-  /** Use an offset as the origin for this schedulereduler and its callbacks. */
+  /** Use an offset as the origin for this scheduler and its callbacks. */
   readonly relative: (offset: Time) => Scheduler
 }
 
@@ -96,7 +96,7 @@ function insertByTime(entries: Entry[], entry: Entry): void {
 }
 
 /**
- * Create a schedulereduler using your timer. Dispose a schedulereduled handle to cancel its task.
+ * Create a scheduler using your timer. Dispose a schedulereduled handle to cancel its task.
  *
  * @example
  * ```ts
@@ -121,7 +121,10 @@ export function newScheduler(timer: Timer): Scheduler {
       return
     }
     const due = entries[0].time
-    if (handle !== null && armedFor <= due) return
+    // A timer we armed for a moment already past never fired: some hosts drop
+    // pending timers (Cloudflare Workers kills them with the request context).
+    // Treat the handle as dead and arm again rather than wait for it forever.
+    if (handle !== null && armedFor <= due && timer.now() <= armedFor) return
     if (handle !== null) timer.clearTimer(handle)
     armedFor = due
     handle = timer.setTimer(runDue, Math.max(0, due - timer.now()))
@@ -177,7 +180,7 @@ function relativeTask(offset: Time, t: Task): Task {
 }
 
 /**
- * Use an offset as time zero for a schedulereduler and its task callbacks.
+ * Use an offset as time zero for a scheduler and its task callbacks.
  *
  * @example
  * ```ts
@@ -219,7 +222,7 @@ export const defaultTimer: Timer = {
 let shared: Scheduler | null = null
 
 /**
- * Get the shared schedulereduler that uses the host clock and timers.
+ * Get the shared scheduler that uses the host clock and timers.
  *
  * @example
  * ```ts
@@ -233,7 +236,7 @@ export function defaultScheduler(): Scheduler {
 }
 
 /**
- * Create a schedulereduler and an `advanceTo(time)` function for deterministic examples and tests.
+ * Create a scheduler and an `advanceTo(time)` function for deterministic examples and tests.
  * Advancing runs all tasks due through that time, inclusively. Time never moves backwards.
  *
  * @example

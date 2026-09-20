@@ -206,3 +206,40 @@ Deno.test('a custom timer is the only way the outside world gets in', () => {
   box.f?.()
   assertEquals(seen, [3])
 })
+
+Deno.test('newScheduler: arms again when the host loses a timer', () => {
+  let now: S.Time = 0
+  const host: { armed: (() => void) | null } = { armed: null }
+  const timer: S.Timer = {
+    now: () => now,
+    setTimer: (f) => {
+      host.armed = f
+      return f
+    },
+    clearTimer: () => {
+      host.armed = null
+    },
+  }
+  const fire = (): void => {
+    const f = host.armed
+    if (f === null) throw new Error('no timer is armed')
+    host.armed = null
+    f()
+  }
+
+  const scheduler = S.newScheduler(timer)
+  const seen: S.Time[] = []
+  scheduler.delay(300, S.task((time) => seen.push(time)))
+
+  // The host dropped the timer without ever calling back. Cloudflare Workers
+  // does exactly this when the request that armed it ends.
+  host.armed = null
+  now = 1000
+
+  scheduler.delay(50, S.task((time) => seen.push(time)))
+  assertEquals(host.armed !== null, true, 'the scheduler should arm again')
+
+  now = 1050
+  fire()
+  assertEquals(seen, [300, 1050])
+})

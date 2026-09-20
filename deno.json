@@ -5,7 +5,7 @@
   "exports": {
     ".": "./mod.ts",
     "./disposable": "./disposable.ts",
-    "./time": "./time.ts",
+    "./scheduler": "./scheduler.ts",
     "./stream": "./stream.ts",
     "./behavior": "./behavior.ts",
     "./future": "./future.ts",
