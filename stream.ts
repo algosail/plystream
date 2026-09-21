@@ -737,10 +737,10 @@ export function mapAccum<S, A, B>(
  * }
  *
  * const source = S.fromIterable([1, 1, 2, 2, 3])
- * S.values(0)(S.distinct(equal)(source)) // => [1, 2, 3]
+ * S.values(0)(S.skipRepeats(equal)(source)) // => [1, 2, 3]
  * ```
  */
-export function distinct<A>(
+export function skipRepeats<A>(
   compare: (a: A, b: A) => boolean,
 ): (strm: Stream<A>) => Stream<A> {
   return (strm: Stream<A>): Stream<A> =>
@@ -866,11 +866,27 @@ export function take(n: number): <A>(strm: Stream<A>) => Stream<A> {
  *   return value >= 3
  * }
  * const source = S.fromIterable([1, 2, 3, 4])
- * S.values(60)(S.takeUntil(reachedThree)(source)) // => [1, 2, 3]
+ * S.values(60)(S.takeThrough(reachedThree)(source)) // => [1, 2, 3]
  * ```
  */
-export function takeUntil<A>(
+export function takeThrough<A>(
   predicate: (a: A) => boolean,
+): (strm: Stream<A>) => Stream<A> {
+  return taking(predicate, true)
+}
+
+// `takeWhile` and `takeThrough` are one operator with the cut on either side
+// of the event that ends the run: one stops before it, the other after. The
+// flag, the handle and the two ways a run can finish are the same in both, so
+// only the cut is passed in — which value ends it, and whether it goes out.
+//
+// Neither can stand in for the other from outside. `takeWhile (p)` is exactly
+// `filter (p)` over `takeThrough (not p)`, but the other way round needs a
+// predicate that keeps a flag, and that one cannot let the source go until a
+// further event arrives to be turned away — on a live stream, possibly never.
+function taking<A>(
+  ends: (a: A) => boolean,
+  keepTheOneThatEnds: boolean,
 ): (strm: Stream<A>) => Stream<A> {
   return (strm: Stream<A>): Stream<A> =>
     stream<A>((snk, sch) => {
@@ -879,12 +895,12 @@ export function takeUntil<A>(
 
       const onEvent = (t: Time, a: A) => {
         if (done) return
-        snk.event(t, a)
-        if (predicate(a)) {
-          done = true
-          dispose(d)
-          snk.end(t)
-        }
+        const last = ends(a)
+        if (!last || keepTheOneThatEnds) snk.event(t, a)
+        if (!last) return
+        done = true
+        dispose(d)
+        snk.end(t)
       }
 
       const onEnd = (t: Time) => {
@@ -921,37 +937,7 @@ export function takeUntil<A>(
 export function takeWhile<A>(
   predicate: (a: A) => boolean,
 ): (strm: Stream<A>) => Stream<A> {
-  return (strm: Stream<A>): Stream<A> =>
-    stream<A>((snk, sch) => {
-      let done = false
-      let d = disposeNone()
-
-      const onEvent = (t: Time, a: A) => {
-        if (done) return
-        if (predicate(a)) {
-          snk.event(t, a)
-          return
-        }
-        done = true
-        dispose(d)
-        snk.end(t)
-      }
-
-      const onEnd = (t: Time) => {
-        if (done) return
-        done = true
-        snk.end(t)
-      }
-
-      d = strm.run(sink(onEvent, onEnd), sch)
-      if (done) dispose(d)
-
-      return disposable(() => {
-        if (done) return
-        done = true
-        dispose(d)
-      })
-    })
+  return taking((a: A) => !predicate(a), false)
 }
 
 /**
@@ -1012,6 +998,7 @@ export function slice(
 /**
  * Stop when the signal emits its first event. The signal value is discarded.
  * A signal that ends without emitting does not stop the source.
+ * This is the one that watches another stream; {@link takeThrough} watches the values.
  *
  * @example
  * ```ts
@@ -1296,10 +1283,10 @@ export function exhaustLatest<A>(s: Stream<Stream<A>>): Stream<A> {
  *   return S.wrap(value * 2)
  * }
  * const source = S.fromIterable([1, 2, 3])
- * S.values(60)(S.flatmap(double)(source)) // => [2, 4, 6]
+ * S.values(60)(S.flatMap(double)(source)) // => [2, 4, 6]
  * ```
  */
-export function flatmap<A, B>(
+export function flatMap<A, B>(
   fn: (a: A) => Stream<B>,
   concurrency = Number.POSITIVE_INFINITY,
 ): (strm: Stream<A>) => Stream<B> {
@@ -1318,10 +1305,10 @@ export function flatmap<A, B>(
  *   return S.at(value)(value)
  * }
  * const source = S.fromIterable([30, 10])
- * S.values(60)(S.switchmap(arriveAfter)(source)) // => [10]
+ * S.values(60)(S.switchMap(arriveAfter)(source)) // => [10]
  * ```
  */
-export function switchmap<A, B>(
+export function switchMap<A, B>(
   fn: (a: A) => Stream<B>,
 ): (strm: Stream<A>) => Stream<B> {
   return (strm: Stream<A>): Stream<B> => switchLatest(strm.map(fn))
@@ -1338,10 +1325,10 @@ export function switchmap<A, B>(
  *   return S.at(value)(value)
  * }
  * const source = S.fromIterable([50, 10])
- * S.values(60)(S.exhaustmap(arriveAfter)(source)) // => [50]
+ * S.values(60)(S.exhaustMap(arriveAfter)(source)) // => [50]
  * ```
  */
-export function exhaustmap<A, B>(
+export function exhaustMap<A, B>(
   fn: (a: A) => Stream<B>,
 ): (strm: Stream<A>) => Stream<B> {
   return (strm: Stream<A>): Stream<B> => exhaustLatest(strm.map(fn))

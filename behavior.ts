@@ -7,6 +7,8 @@
 import type {
   ApplyMethods,
   ChainMethods,
+  ComonadMethods,
+  ExtendMethods,
   FunctorMethods,
   MonadTypeRep,
   Satisfies,
@@ -33,8 +35,7 @@ import {
 export type Observer<A> = (value: A) => void
 
 /**
- * A value you can read now and observe over time. Use `map` to transform it,
- * `ap` to combine it with a behavior of functions, and `chain` to choose another behavior.
+ * A value you can read now and observe over time.
  */
 export interface Behavior<A> extends BehaviorMethods<A>, Disposable {
   /** Read the current value without registering an observer. */
@@ -43,10 +44,6 @@ export interface Behavior<A> extends BehaviorMethods<A>, Disposable {
   readonly observe: (o: Observer<A>) => Disposable
 }
 
-/**
- * A value you can read now and observe over time. Use `map` to transform it,
- * `ap` to combine it with a behavior of functions, and `chain` to choose another behavior.
- */
 /**
  * Type mapping for using Behavior with generic ply operations.
  */
@@ -72,7 +69,9 @@ interface BehaviorMethods<A>
     ShowMethods<Behavior<A>, A>,
     FunctorMethods<Behavior<A>, A>,
     ApplyMethods<Behavior<A>, A>,
-    ChainMethods<Behavior<A>, A> {
+    ChainMethods<Behavior<A>, A>,
+    ExtendMethods<Behavior<A>, A>,
+    ComonadMethods<Behavior<A>, A> {
   readonly '@@type': 'Behavior'
   readonly _shape: BehaviorShape
   readonly _A?: (_: never) => A
@@ -153,6 +152,28 @@ const proto: BehaviorProto = {
         cancelNotification(notice)
         dispose(outer)
         dispose(inner)
+      })
+    })
+  },
+
+  extract<A>(this: Behavior<A>): A {
+    return this.sample()
+  },
+
+  extend<A, B>(this: Behavior<A>, f: (w: Behavior<A>) => B): Behavior<B> {
+    const read = () => f(this)
+    return behavior<B>(read, (o) => {
+      const notice = cell(() => o(read()))
+      let live = false
+      const d = this.observe(() => {
+        if (live) notifyLater(notice)
+      })
+      live = true
+      o(read())
+      return disposable(() => {
+        live = false
+        cancelNotification(notice)
+        dispose(d)
       })
     })
   },
@@ -359,6 +380,60 @@ export function accum<Acc, A>(
           sch,
         )
       ),
+    )
+  }
+}
+
+/**
+ * Fold a behavior into a behavior, keeping what the fold last produced.
+ * The result starts folded with the value the source already holds; dispose it to stop observing.
+ *
+ * @example
+ * ```ts
+ * import * as S from '@algosail/plystream'
+ *
+ * const [clicks, click] = S.bus<void>()
+ * const count = S.accum((n: number) => n + 1, 0)(clicks)
+ * const total = S.accumFrom((sum: number, n: number) => sum + n, 0)(count)
+ *
+ * click()
+ * click()
+ * S.sample(total) // => 3
+ * ```
+ */
+export function accumFrom<Acc, A>(
+  step: (acc: Acc, a: A) => Acc,
+  init: Acc,
+): (source: Behavior<A>) => Behavior<Acc> {
+  return (source) => {
+    const observers = new Set<Observer<Acc>>()
+    let current = init
+    let live = false
+
+    const notice = cell(() => {
+      for (const o of [...observers]) {
+        if (observers.has(o)) o(current)
+      }
+    })
+
+    const d = source.observe((a: A) => {
+      current = step(current, a)
+      if (live) notifyLater(notice)
+    })
+    live = true
+
+    return behavior<Acc>(
+      () => current,
+      (o) => {
+        o(current)
+        observers.add(o)
+        return disposable(() => observers.delete(o))
+      },
+      () => {
+        observers.clear()
+        cancelNotification(notice)
+        dispose(d)
+      },
     )
   }
 }

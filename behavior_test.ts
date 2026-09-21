@@ -244,7 +244,196 @@ Deno.test('transact makes several changes into one move', () => {
   assertEquals(seen, ['Grace Hopper'], 'one frame for the whole move')
 })
 
+Deno.test('accumFrom: folds a behavior the way accum folds a stream', () => {
+  const { click, count } = createCounter()
+  const total = S.accumFrom((sum: number, n: number) => sum + n, 0)(count)
+
+  assertEquals(S.sample(total), 0, 'folded with what the source already held')
+  click()
+  click()
+  assertEquals(S.sample(total), 3, '0 + 1 + 2')
+})
+
+Deno.test('accumFrom: one fold however many are watching', () => {
+  let steps = 0
+  const { click, count } = createCounter()
+  const total = S.accumFrom(
+    (sum: number, n: number) => (steps += 1, sum + n),
+    0,
+  )(
+    count,
+  )
+
+  const a: number[] = []
+  const b: number[] = []
+  S.observe((n: number) => a.push(n))(total)
+  S.observe((n: number) => b.push(n))(total)
+  click()
+
+  assertEquals([a, b], [[0, 1], [0, 1]], 'both see the same values')
+  assertEquals(
+    steps,
+    2,
+    'the seed and the one click, not one pair per observer',
+  )
+})
+
+Deno.test('accumFrom: reading it twice does not move it', () => {
+  const { click, count } = createCounter()
+  const total = S.accumFrom((sum: number, n: number) => sum + n, 0)(count)
+  click()
+  assertEquals([S.sample(total), S.sample(total)], [1, 1])
+})
+
+Deno.test('accumFrom: an observer arriving late gets the state as it is', () => {
+  const { click, count } = createCounter()
+  const total = S.accumFrom((sum: number, n: number) => sum + n, 0)(count)
+  click()
+  click()
+  const seen: number[] = []
+  S.observe((n: number) => seen.push(n))(total)
+  assertEquals(seen, [3])
+})
+
+Deno.test('accumFrom: a batch delivers the fold once, at its last value', () => {
+  const [pushes, push] = S.bus<number>()
+  const source = S.stepper(0)(pushes)
+  const total = S.accumFrom((sum: number, n: number) => sum + n, 0)(source)
+
+  const seen: number[] = []
+  S.observe((n: number) => seen.push(n))(total)
+  S.batch(() => {
+    push(1)
+    push(2)
+  })
+  assertEquals([seen, S.sample(total)], [[0, 3], 3])
+})
+
+Deno.test('accumFrom: disposing it stops observing the source', () => {
+  let steps = 0
+  const { click, count } = createCounter()
+  const total = S.accumFrom(
+    (sum: number, n: number) => (steps += 1, sum + n),
+    0,
+  )(
+    count,
+  )
+  click()
+  S.dispose(total)
+  click()
+  assertEquals(steps, 2, 'the seed and the first click only')
+})
+
+Deno.test('extract: the current value, under the name ply knows', () => {
+  const { click, count } = createCounter()
+  click()
+  assertEquals(P.extract(count), S.sample(count))
+})
+
+Deno.test('extend: hands the function the behavior rather than the value', () => {
+  const { click, count } = createCounter()
+  const doubled = P.extend((w: S.Behavior<number>) => S.sample(w) * 2)(count)
+
+  assertEquals(S.sample(doubled), 0)
+  click()
+  assertEquals(S.sample(doubled), 2)
+})
+
+Deno.test('extend: for this type that is map through a constant', () => {
+  const f = (w: S.Behavior<number>) => S.sample(w) * 10
+  const [pushes, push] = S.bus<number>()
+  const source = S.stepper(1)(pushes)
+
+  const whole: number[] = []
+  const part: number[] = []
+  S.observe((n: number) => whole.push(n))(
+    P.extend(f)(source) as S.Behavior<number>,
+  )
+  S.observe((n: number) => part.push(n))(
+    P.map((a: number) => f(S.constant(a)))(source),
+  )
+  push(2)
+  push(3)
+
+  assertEquals(whole, part)
+  assertEquals(whole, [10, 20, 30])
+})
+
 // Laws
+
+Deno.test('extend: the left identity law', () => {
+  const { click, count } = createCounter()
+  const whole = (w: S.Behavior<number>) => S.sample(w) + 1
+  click()
+  assertEquals(P.extract(P.extend(whole)(count)), whole(count))
+})
+
+Deno.test('extend: the right identity law', () => {
+  const { click, count } = createCounter()
+  click()
+  const same = P.extend(P.extract)(count) as S.Behavior<number>
+  assertEquals(S.sample(same), S.sample(count))
+  click()
+  assertEquals(S.sample(same), S.sample(count))
+})
+
+Deno.test('extend: identity is as faithful as map and chain, no less', () => {
+  const deliveries = (make: (b: S.Behavior<number>) => S.Behavior<number>) => {
+    const [pushes, push] = S.bus<number>()
+    const source = S.stepper(1)(pushes)
+    const seen: number[] = []
+    S.observe((n: number) => seen.push(n))(make(source))
+    S.batch(() => {
+      push(2)
+      push(3)
+    })
+    return seen
+  }
+
+  const straight = deliveries((b) => b)
+  assertEquals(straight, [1, 2, 3], 'the source itself delivers every step')
+  for (
+    const [name, make] of [
+      ['map', (b: S.Behavior<number>) => P.map((n: number) => n)(b)],
+      [
+        'chain',
+        (b: S.Behavior<number>) => b.chain((n: number) => S.constant(n)),
+      ],
+      [
+        'extend',
+        (b: S.Behavior<number>) => P.extend(P.extract)(b) as S.Behavior<number>,
+      ],
+    ] as const
+  ) {
+    assertEquals(deliveries(make), [1, 3], name)
+  }
+})
+
+Deno.test('extend: composition is associative', () => {
+  const { click, count } = createCounter()
+  const f = (w: S.Behavior<number>) => S.sample(w) + 1
+  const g = (w: S.Behavior<number>) => S.sample(w) * 2
+  click()
+  const left = P.extend(f)(P.extend(g)(count) as S.Behavior<number>)
+  const right = P.extend((w: S.Behavior<number>) =>
+    f(P.extend(g)(w) as S.Behavior<number>)
+  )(count)
+  assertEquals(S.sample(left as S.Behavior<number>), S.sample(right))
+})
+
+Deno.test('extend: map is extend through extract', () => {
+  const { click, count } = createCounter()
+  const f = (n: number) => n * 3
+  click()
+  assertEquals(
+    S.sample(
+      P.extend((w: S.Behavior<number>) => f(P.extract(w)))(
+        count,
+      ) as S.Behavior<number>,
+    ),
+    S.sample(count.map(f)),
+  )
+})
 
 Deno.test('map: identity preserves the current value', () => {
   const { click, count } = createCounter()
@@ -724,6 +913,8 @@ Deno.test('Behavior: the shape of a value', () => {
     '@@type',
     'ap',
     'chain',
+    'extend',
+    'extract',
     'map',
     'show',
   ])
@@ -861,15 +1052,6 @@ Deno.test('ply reduce: rejects unsupported Behavior operations', () => {
     () => P.reduce(add)(0)(b as never),
     TypeError,
     'reduce: Behavior has no Foldable',
-  )
-})
-
-Deno.test('ply extract: rejects unsupported Behavior operations', () => {
-  const b = S.constant(1)
-  assertThrows(
-    () => P.extract(b as never),
-    TypeError,
-    'extract: Behavior has no Comonad',
   )
 })
 

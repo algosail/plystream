@@ -109,18 +109,29 @@ Deno.test('mapAccum: updates state and emits a separate output', () => {
   )
 })
 
-Deno.test('distinct', () => {
+Deno.test('skipRepeats: drops a value equal to the one just emitted', () => {
   function equal(first: number, second: number): boolean {
     return first === second
   }
 
   assertEquals(
     S.values(0)(
-      S.distinct(equal)(
+      S.skipRepeats(equal)(
         S.fromIterable([1, 1, 2, 2, 3]),
       ),
     ),
     [1, 2, 3],
+  )
+})
+
+Deno.test('skipRepeats: a value that comes back after another gets through', () => {
+  function equal(first: number, second: number): boolean {
+    return first === second
+  }
+
+  assertEquals(
+    S.values(0)(S.skipRepeats(equal)(S.fromIterable([1, 2, 1]))),
+    [1, 2, 1],
   )
 })
 
@@ -141,19 +152,6 @@ Deno.test('take: keeps the first events', () => {
 
 Deno.test('take: limits an infinite stream', () => {
   assertEquals(S.values(100)(S.take(2)(S.periodic(10))), [10, 20])
-})
-
-Deno.test('takeUntil keeps the value that ends it', () => {
-  function reachedThree(value: number): boolean {
-    return value >= 3
-  }
-
-  assertEquals(
-    S.values(0)(
-      S.takeUntil(reachedThree)(S.fromIterable([1, 2, 3, 4])),
-    ),
-    [1, 2, 3],
-  )
 })
 
 Deno.test('delay: shifts delivery times and preserves values', () => {
@@ -222,27 +220,27 @@ Deno.test('exhaustLatest sees the one in flight through', () => {
   )
 })
 
-Deno.test('flatmap: merges transformed values', () => {
+Deno.test('flatMap: merges transformed values', () => {
   function doubleAsStream(value: number): S.Stream<number> {
     return S.wrap(value * 2)
   }
 
   assertEquals(
     S.values(0)(
-      S.flatmap(doubleAsStream)(S.fromIterable([1, 2, 3])),
+      S.flatMap(doubleAsStream)(S.fromIterable([1, 2, 3])),
     ),
     [2, 4, 6],
   )
 })
 
-Deno.test('exhaustmap: ignores arrivals while the first stream runs', () => {
+Deno.test('exhaustMap: ignores arrivals while the first stream runs', () => {
   function arriveAfter(value: number): S.Stream<number> {
     return S.at(value)(value)
   }
 
   assertEquals(
     S.values(60)(
-      S.exhaustmap(arriveAfter)(S.fromIterable([50, 10])),
+      S.exhaustMap(arriveAfter)(S.fromIterable([50, 10])),
     ),
     [50],
   )
@@ -329,14 +327,14 @@ Deno.test('takeWhile: can reject the first value', () => {
   )
 })
 
-Deno.test('takeUntil: includes the first matching value', () => {
+Deno.test('takeThrough: includes the first matching value', () => {
   function reachedThree(value: number): boolean {
     return value >= 3
   }
 
   assertEquals(
     S.values(0)(
-      S.takeUntil(reachedThree)(S.fromIterable([1, 2, 3, 4])),
+      S.takeThrough(reachedThree)(S.fromIterable([1, 2, 3, 4])),
     ),
     [1, 2, 3],
   )
@@ -427,7 +425,7 @@ Deno.test('filter: can keep only Right values', () => {
   )
 })
 
-Deno.test('flatmap: can replace a Left with several recovery values', () => {
+Deno.test('flatMap: can replace a Left with several recovery values', () => {
   const src = S.fromIterable([success(1), failure('x'), success(3)])
   function recover(e: P.Either<string, number>) {
     function fallback(): S.Stream<number> {
@@ -438,7 +436,7 @@ Deno.test('flatmap: can replace a Left with several recovery values', () => {
 
   assertEquals(
     S.values(0)(
-      S.flatmap(recover)(src),
+      S.flatMap(recover)(src),
     ),
     [1, -1, -2, 3],
   )
@@ -594,14 +592,14 @@ Deno.test('mergeConcurrently: runs streams together when capacity allows', () =>
   assertEquals(S.values(100)(S.mergeConcurrently(2)(inners)), ['b', 'a'])
 })
 
-Deno.test('switchmap: keeps the newest inner stream', () => {
+Deno.test('switchMap: keeps the newest inner stream', () => {
   function arriveAfter(value: number): S.Stream<number> {
     return S.at(value)(value)
   }
 
   assertEquals(
     S.values(60)(
-      S.switchmap(arriveAfter)(S.fromIterable([30, 10])),
+      S.switchMap(arriveAfter)(S.fromIterable([30, 10])),
     ),
     [10],
   )
@@ -939,7 +937,7 @@ Deno.test('a failure does not end the stream', () => {
 
   assertEquals(
     S.simulate(60)(
-      S.flatmap(recover)(timed),
+      S.flatMap(recover)(timed),
     ),
     [[10, 1], [25, -1], [30, 3]],
   )
