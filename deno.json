@@ -20,7 +20,7 @@
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1",
-    "@algosail/ply": "jsr:@algosail/ply@0.0.2",
+    "@algosail/ply": "jsr:@algosail/ply@0.1.0",
     "@algosail/plyfuture": "jsr:@algosail/plyfuture@0.1.0",
     "@algosail/plystream": "./mod.ts",
     "@algosail/plystream/future": "./future.ts"
